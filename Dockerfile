@@ -1,5 +1,5 @@
-# 1. Base Image
-FROM node:18-slim
+# 1. Base Image - Node 18 se Node 20 par upgrade kiya (Supabase requirement)
+FROM node:20-slim
 
 # 2. Install System Dependencies (pdftoppm ke liye)
 RUN apt-get update && apt-get install -y \
@@ -11,23 +11,24 @@ WORKDIR /app
 
 # 4. Env Variables
 ENV NODE_ENV=production
-ENV PORT=5000
+# Render automatically PORT assign karta hai, isliye default 10000 rakha hai 
+# par aapka code process.env.PORT ko hi use karega
+ENV PORT=10000
 
 # 5. Install NPM Dependencies
 COPY package*.json ./
-# modular structure ke liye saari production dependencies chahiye
-RUN npm install --only=production
+# Production dependencies ke liye 'npm ci' zyada stable hota hai
+RUN npm install --production
 
 # 6. Copy All Source Code 
-# Ye src/, uploads/, aur config/ saare folders copy kar lega
 COPY . .
 
 # 7. Setup Permission for folders
-RUN mkdir -p uploads output && chmod 777 uploads output
+# Folder create karke sahi ownership dena (Render/Linux best practice)
+RUN mkdir -p uploads output && chmod -R 777 uploads output
 
 # 8. Expose Port
-EXPOSE 5000
+EXPOSE 10000
 
 # 9. Start Server
-# Humne main file src/index.js rakhi hai, toh ye sahi hai
 CMD ["node", "src/index.js"]
