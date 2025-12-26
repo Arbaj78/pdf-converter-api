@@ -1,24 +1,33 @@
-# 1. Official Node.js image use karein
+# 1. Base Image
 FROM node:18-slim
 
-# 2. System updates aur Poppler Utils install karein (Bahut Zaroori)
-RUN apt-get update && apt-get install -y poppler-utils
+# 2. Install System Dependencies (pdftoppm ke liye)
+RUN apt-get update && apt-get install -y \
+    poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
 
-# 3. Work directory set karein
+# 3. Work Directory
 WORKDIR /app
 
-# 4. Dependencies copy aur install karein
-COPY package*.json ./
-RUN npm install
+# 4. Env Variables
+ENV NODE_ENV=production
+ENV PORT=5000
 
-# 5. Baaki code copy karein
+# 5. Install NPM Dependencies
+COPY package*.json ./
+# modular structure ke liye saari production dependencies chahiye
+RUN npm install --only=production
+
+# 6. Copy All Source Code 
+# Ye src/, uploads/, aur config/ saare folders copy kar lega
 COPY . .
 
-# 6. Uploads aur Output folder create karein (taaki error na aaye)
-RUN mkdir -p uploads output
+# 7. Setup Permission for folders
+RUN mkdir -p uploads output && chmod 777 uploads output
 
-# 7. Port expose karein
+# 8. Expose Port
 EXPOSE 5000
 
-# 8. Server start command
+# 9. Start Server
+# Humne main file src/index.js rakhi hai, toh ye sahi hai
 CMD ["node", "src/index.js"]
