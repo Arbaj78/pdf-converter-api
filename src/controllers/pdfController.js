@@ -8,8 +8,8 @@ exports.handleConversion = async (req, res) => {
     // 1. Validations
     if (!req.file) return res.status(400).send('No file uploaded');
     
-    // n8n se aane wale fields
-    const { uuid, terms_conditions_page_no } = req.body; 
+    // n8n se aane wale fields (Added total_investment_amount)
+    const { uuid, terms_conditions_page_no, total_investment_amount } = req.body; 
 
     if (!uuid) {
         return res.status(400).json({ error: 'UUID is required to update the record' });
@@ -18,7 +18,6 @@ exports.handleConversion = async (req, res) => {
     const filePath = req.file.path;
     const outputDir = path.join(__dirname, '../../output');
     
-    // Output directory ensure karein
     if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
     }
@@ -26,19 +25,16 @@ exports.handleConversion = async (req, res) => {
     const filePrefix = path.basename(filePath, path.extname(filePath));
 
     try {
-        console.log(`[Controller] Starting conversion for UUID: ${uuid}, Max Pages: ${terms_conditions_page_no || 'All'}`);
+        console.log(`[Controller] Starting conversion for UUID: ${uuid}`);
 
-        // 2. PDF to Images Conversion (Limit apply kar di gayi hai)
+        // 2. PDF to Images Conversion
         await pdfService.convertPdfToImages(filePath, outputDir, filePrefix, terms_conditions_page_no);
 
         // 3. Generated Files Read karein
         const allFiles = fs.readdirSync(outputDir);
         const generatedImages = allFiles
             .filter(f => f.startsWith(filePrefix) && (f.endsWith('.jpg') || f.endsWith('.jpeg')))
-            .sort((a, b) => {
-                // Numeric sort taaki page-1, page-2 sequence mein rahein
-                return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
-            });
+            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
         // 4. HubSpot Upload
         const imageUrls = [];
@@ -50,13 +46,13 @@ exports.handleConversion = async (req, res) => {
             }
         }
 
-        // 5. SUPABASE UPDATE
+        // 5. SUPABASE UPDATE (Added total_investment_amount here)
         const { data, error } = await supabase
             .from('pdf_conversions')
             .update({ 
                 image_urls: imageUrls,
-                // Optional: aap record mein ye bhi save kar sakte hain ki kitne page process huye
-                processed_pages: terms_conditions_page_no || 'all' 
+                processed_pages: terms_conditions_page_no || 'all',
+                total_investment_amount: total_investment_amount // Data save ho raha hai
             })
             .eq('id', uuid)
             .select();
@@ -64,19 +60,18 @@ exports.handleConversion = async (req, res) => {
         if (error) throw error;
 
         if (!data || data.length === 0) {
-            return res.status(404).json({ error: 'No record found with the provided UUID in Supabase' });
+            return res.status(404).json({ error: 'No record found in Supabase' });
         }
 
         // 6. Success Response
         res.json({ 
             success: true, 
             id: uuid, 
-            pages_processed: terms_conditions_page_no || 'all',
-            images_count: imageUrls.length,
+            amount_saved: total_investment_amount, 
             images: imageUrls 
         });
 
-        // 7. Cleanup local files
+        // 7. Cleanup
         const filesToDelete = [filePath, ...generatedImages.map(img => path.join(outputDir, img))];
         cleanupFiles(filesToDelete);
 
@@ -86,14 +81,22 @@ exports.handleConversion = async (req, res) => {
     }
 };
 
+// Frontend ke liye Get Result function
 exports.getResult = async (req, res) => {
     const { id } = req.params;
     const { data, error } = await supabase
         .from('pdf_conversions')
-        .select('image_urls, created_at')
+        // select mein total_investment_amount add kiya taaki frontend fetch kar sake
+        .select('image_urls, created_at, total_investment_amount') 
         .eq('id', id)
         .single();
 
     if (error || !data) return res.status(404).json({ error: 'Record not found' });
-    res.json({ success: true, images: data.image_urls, date: data.created_at });
+    
+    res.json({ 
+        success: true, 
+        images: data.image_urls, 
+        total_investment_amount: data.total_investment_amount, // Frontend calculation ke liye
+        date: data.created_at 
+    });
 };
