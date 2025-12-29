@@ -15,7 +15,7 @@ exports.handleConversion = async (req, res) => {
 
     const filePath = req.file.path;
     
-    // FIX: Unique folder for every request to avoid collisions
+    // 1. Unique folder for every request
     const requestFolderName = `req_${uuid}_${Date.now()}`;
     const requestFolder = path.join(__dirname, '../../output', requestFolderName);
     
@@ -23,28 +23,55 @@ exports.handleConversion = async (req, res) => {
         fs.mkdirSync(requestFolder, { recursive: true });
     }
 
-    const filePrefix = "page"; // Static prefix is safe now because folder is unique
+    // Prefix "page" format: pdftoppm use karke "page-1.jpg" banayega
+    const filePrefix = "page"; 
 
     try {
-        console.log(`[Controller] Starting conversion for UUID: ${uuid} in unique folder`);
+        console.log(`[Controller] Starting conversion for UUID: ${uuid}`);
 
-        // 1. Convert
+        // 2. Conversion (pdfService now includes a 1s wait internally)
         await pdfService.convertPdfToImages(filePath, requestFolder, filePrefix, terms_conditions_page_no);
 
-        // 2. Read only from the unique folder
-        const generatedImages = fs.readdirSync(requestFolder)
-            .filter(f => f.endsWith('.jpg') || f.endsWith('.jpeg'))
-            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+        // 3. Robust File Reading Logic (Verify and Retry)
+        let generatedImages = [];
+        let retryCount = 0;
+        const maxRetries = 3;
 
-        // 3. Upload to HubSpot
+        while (retryCount < maxRetries) {
+            const files = fs.readdirSync(requestFolder);
+            generatedImages = files
+                .filter(f => f.startsWith(filePrefix) && (f.endsWith('.jpg') || f.endsWith('.jpeg')))
+                .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+
+            // Agar files mil gayi hain, toh loop se bahar niklein
+            if (generatedImages.length > 0) break;
+
+            // Agar nahi mili, toh 500ms wait karke dubara koshish karein
+            console.log(`[Controller] Files not visible yet, retry ${retryCount + 1}/${maxRetries}...`);
+            await new Promise(resolve => setTimeout(resolve, 500));
+            retryCount++;
+        }
+
+        if (generatedImages.length === 0) {
+            throw new Error("No images were generated or could be read from the disk.");
+        }
+
+        console.log(`[Controller] Successfully found ${generatedImages.length} images. Starting upload...`);
+
+        // 4. Upload to HubSpot
         const imageUrls = [];
         for (const imgName of generatedImages) {
             const fullImgPath = path.join(requestFolder, imgName);
             const publicUrl = await pdfService.uploadToHubSpot(fullImgPath, imgName);
-            if (publicUrl) imageUrls.push(publicUrl);
+            
+            // HubSpot response handle karna (Object mapping)
+            if (publicUrl) {
+                // Agar publicUrl ek object hai toh pure object ko push karein
+                imageUrls.push(typeof publicUrl === 'string' ? { public_url: publicUrl, name: imgName } : publicUrl);
+            }
         }
 
-        // 4. Update Supabase
+        // 5. Update Supabase
         const { data, error } = await supabase
             .from('pdf_conversions')
             .update({ 
@@ -57,7 +84,7 @@ exports.handleConversion = async (req, res) => {
 
         if (error) throw error;
 
-        // 5. Success Response
+        // 6. Final Response
         res.json({ 
             success: true, 
             id: uuid, 
@@ -65,13 +92,13 @@ exports.handleConversion = async (req, res) => {
             images: imageUrls 
         });
 
-        // 6. Final Cleanup: Delete the entire unique folder and temp PDF
+        // 7. Final Cleanup
         cleanupFolder(requestFolder);
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
 
     } catch (error) {
         console.error("[Controller] Critical Error:", error);
-        cleanupFolder(requestFolder); // Cleanup on error too
+        cleanupFolder(requestFolder);
         res.status(500).json({ error: 'Processing failed', details: error.message });
     }
 };
