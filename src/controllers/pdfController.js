@@ -10,7 +10,15 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 exports.handleConversion = async (req, res) => {
     if (!req.file) return res.status(400).send('No file uploaded');
     
-    const { uuid, terms_conditions_page_no, total_investment_amount } = req.body;
+    // 1. n8n se ab 'manufacturer' bhi extract karein
+    const { 
+        uuid, 
+        terms_conditions_page_no, 
+        total_investment_amount, 
+        permit_fee,
+        manufacturer // Naya field
+    } = req.body;
+    
     if (!uuid) {
         if (req.file.path) fs.unlinkSync(req.file.path);
         return res.status(400).json({ error: 'UUID is required' });
@@ -39,34 +47,28 @@ exports.handleConversion = async (req, res) => {
             });
 
         generatedImagesFullPaths = generatedImages.map(img => path.join(outputDir, img));
-        console.log(`[Controller] Found ${generatedImages.length} images to upload.`);
 
         // 3. HubSpot Upload with DELAY
         const imageUrls = [];
         for (const imgName of generatedImages) {
             const fullImgPath = path.join(outputDir, imgName);
-            
-            console.log(`[Controller] Uploading: ${imgName}...`);
             const publicUrl = await pdfService.uploadToHubSpot(fullImgPath, imgName);
             
             if (publicUrl) {
-                console.log(`[Controller] Success: ${imgName}`);
                 imageUrls.push(publicUrl);
-            } else {
-                console.error(`[Controller] Failed to get URL for: ${imgName}`);
             }
-
-            // 1 second ka gap taaki n8n block na ho
             await delay(1000); 
         }
 
-        // 4. Update Supabase
+        // 4. Update Supabase (permit_fee aur manufacturer dono add kiye gaye hain)
         const { data, error } = await supabase
             .from('pdf_conversions')
             .update({
                 image_urls: imageUrls,
                 processed_pages: terms_conditions_page_no || 'all',
-                total_investment_amount: total_investment_amount 
+                total_investment_amount: total_investment_amount,
+                permit_fee: permit_fee,
+                manufacturer: manufacturer // Database mein save ho raha hai
             })
             .eq('id', uuid)
             .select();
@@ -76,7 +78,9 @@ exports.handleConversion = async (req, res) => {
         res.json({
             success: true,
             id: uuid,
+            manufacturer: manufacturer,
             amount_saved: total_investment_amount,
+            permit_fee: permit_fee,
             images: imageUrls
         });
 
@@ -84,21 +88,19 @@ exports.handleConversion = async (req, res) => {
         console.error("[Controller] Error:", error);
         res.status(500).json({ error: 'Processing failed' });
     } finally {
-        // 5. Cleanup
-        console.log("[Controller] Running Auto-Cleanup...");
         const filesToDelete = [filePath, ...generatedImagesFullPaths];
         cleanupFiles(filesToDelete);
     }
 };
 
-
-// Frontend ke liye Get Result function (No changes needed here)
+// Frontend ke liye Get Result function
 exports.getResult = async (req, res) => {
     const { id } = req.params;
     try {
         const { data, error } = await supabase
             .from('pdf_conversions')
-            .select('image_urls, created_at, total_investment_amount')
+            // select query mein manufacturer add kiya gaya hai
+            .select('image_urls, created_at, total_investment_amount, permit_fee, manufacturer')
             .eq('id', id)
             .single();
 
@@ -108,6 +110,8 @@ exports.getResult = async (req, res) => {
             success: true,
             images: data.image_urls,
             total_investment_amount: data.total_investment_amount,
+            permit_fee: data.permit_fee,
+            manufacturer: data.manufacturer, // Frontend fetch karega
             date: data.created_at
         });
     } catch (err) {

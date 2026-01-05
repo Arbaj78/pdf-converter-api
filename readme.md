@@ -16,8 +16,9 @@ Infrastructure: Docker container deployed on Render
 Utilities: Multer (Uploads), Archiver (Zip Compression)
 
 ⚡ API Endpoint
+
 1. Convert PDF to Images
-Upload a PDF file to convert it into images.
+   Upload a PDF file to convert it into images.
 
 URL: /convert
 
@@ -29,3 +30,5 @@ key = file
 type = file
 
 📥 Request BodyKeyTypeDescriptionRequiredfileFileThe PDF file you want to convert.✅ Yes
+
+[{"name": "page_01-2", "size": "175596", "width": "1275", "height": "1650", "extension": "jpg", "public_url": "https://44953839.fs1.hubspotusercontent-na1.net/hubfs/44953839/Leap%20Automation%20Images/page_01-2.jpg"}, {"name": "page_02-2", "size": "115714", "width": "1275", "height": "1650", "extension": "jpg", "public_url": "https://44953839.fs1.hubspotusercontent-na1.net/hubfs/44953839/Leap%20Automation%20Images/page_02-2.jpg"}]
