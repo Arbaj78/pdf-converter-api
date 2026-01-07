@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const axios = require('axios'); // n8n webhook trigger karne ke liye
 const pdfService = require('../services/pdfService');
 const supabase = require('../config/supabase');
 const { cleanupFiles } = require('../utils/fileHelper');
@@ -7,16 +8,18 @@ const { cleanupFiles } = require('../utils/fileHelper');
 // Delay function taaki n8n/HubSpot par load na pade
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// ==========================================================
+// 1. PDF Conversion & Data Entry (n8n to Backend)
+// ==========================================================
 exports.handleConversion = async (req, res) => {
     if (!req.file) return res.status(400).send('No file uploaded');
     
-    // 1. n8n se ab 'manufacturer' bhi extract karein
     const { 
         uuid, 
         terms_conditions_page_no, 
         total_investment_amount, 
         permit_fee,
-        manufacturer // Naya field
+        manufacturer 
     } = req.body;
     
     if (!uuid) {
@@ -33,10 +36,10 @@ exports.handleConversion = async (req, res) => {
     try {
         if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
-        // 1. Convert PDF to Images
+        // PDF to Images
         await pdfService.convertPdfToImages(filePath, outputDir, filePrefix, terms_conditions_page_no);
 
-        // 2. Read and Sort
+        // Read and Sort Images
         const allFiles = fs.readdirSync(outputDir);
         const generatedImages = allFiles
             .filter(f => f.startsWith(filePrefix) && f.endsWith('.jpg'))
@@ -48,7 +51,7 @@ exports.handleConversion = async (req, res) => {
 
         generatedImagesFullPaths = generatedImages.map(img => path.join(outputDir, img));
 
-        // 3. HubSpot Upload with DELAY
+        // HubSpot Upload with Delay
         const imageUrls = [];
         for (const imgName of generatedImages) {
             const fullImgPath = path.join(outputDir, imgName);
@@ -60,7 +63,7 @@ exports.handleConversion = async (req, res) => {
             await delay(1000); 
         }
 
-        // 4. Update Supabase (permit_fee aur manufacturer dono add kiye gaye hain)
+        // Supabase Update
         const { data, error } = await supabase
             .from('pdf_conversions')
             .update({
@@ -68,7 +71,7 @@ exports.handleConversion = async (req, res) => {
                 processed_pages: terms_conditions_page_no || 'all',
                 total_investment_amount: total_investment_amount,
                 permit_fee: permit_fee,
-                manufacturer: manufacturer // Database mein save ho raha hai
+                manufacturer: manufacturer
             })
             .eq('id', uuid)
             .select();
@@ -78,9 +81,6 @@ exports.handleConversion = async (req, res) => {
         res.json({
             success: true,
             id: uuid,
-            manufacturer: manufacturer,
-            amount_saved: total_investment_amount,
-            permit_fee: permit_fee,
             images: imageUrls
         });
 
@@ -93,14 +93,16 @@ exports.handleConversion = async (req, res) => {
     }
 };
 
-// Frontend ke liye Get Result function
+// ==========================================================
+// 2. Get Result (Frontend Status & Data Check)
+// ==========================================================
 exports.getResult = async (req, res) => {
     const { id } = req.params;
     try {
         const { data, error } = await supabase
             .from('pdf_conversions')
-            // select query mein manufacturer add kiya gaya hai
-            .select('image_urls, created_at, total_investment_amount, permit_fee, manufacturer')
+            // Status track karne ke liye is_signed aur signed_pdf_url add kiya
+            .select('image_urls, created_at, total_investment_amount, permit_fee, manufacturer, is_signed, signed_pdf_url')
             .eq('id', id)
             .single();
 
@@ -111,10 +113,43 @@ exports.getResult = async (req, res) => {
             images: data.image_urls,
             total_investment_amount: data.total_investment_amount,
             permit_fee: data.permit_fee,
-            manufacturer: data.manufacturer, // Frontend fetch karega
+            manufacturer: data.manufacturer,
+            is_signed: data.is_signed || false, // Status for frontend check
+            signed_pdf_url: data.signed_pdf_url || null,
             date: data.created_at
         });
     } catch (err) {
         res.status(500).json({ error: 'Internal Server Error' });
+    }
+};
+
+// ==========================================================
+// 3. Initiate DocuSign Signing (Frontend to n8n)
+// ==========================================================
+exports.initiateSigning = async (req, res) => {
+    const { uuid } = req.body;
+    
+    if (!uuid ) {
+        return res.status(400).json({ error: 'UUID is required' });
+    }
+
+    try {
+        const n8nWebhookUrl = 'https://n8n.srv871973.hstgr.cloud/webhook/docusign-initiate-signing'; 
+        
+        const response = await axios.post(n8nWebhookUrl, { uuid });
+
+        // DEBUG: Terminal mein check karein ki n8n kya bhej raha hai
+        console.log("n8n Response Data:", response.data);
+
+        // Dono cases handle karein: underscore aur camelCase
+        const finalUrl = response.data.signingUrl || response.data.signing_url || response.data;
+
+        res.json({
+            success: true,
+            signingUrl: finalUrl
+        });
+    } catch (error) {
+        console.error("DocuSign Initiation Error:", error.response?.data || error.message);
+        res.status(500).json({ error: 'Could not initiate signing process' });
     }
 };
