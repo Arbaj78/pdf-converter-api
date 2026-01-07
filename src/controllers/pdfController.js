@@ -128,28 +128,24 @@ exports.getResult = async (req, res) => {
 // ==========================================================
 exports.initiateSigning = async (req, res) => {
     const { uuid } = req.body;
-    
-    if (!uuid ) {
-        return res.status(400).json({ error: 'UUID is required' });
-    }
+    if (!uuid) return res.status(400).json({ error: 'UUID is required' });
 
     try {
         const n8nWebhookUrl = 'https://n8n.srv871973.hstgr.cloud/webhook/docusign-initiate-signing'; 
         
         const response = await axios.post(n8nWebhookUrl, { uuid });
 
-        // DEBUG: Terminal mein check karein ki n8n kya bhej raha hai
-        console.log("n8n Response Data:", response.data);
-
-        // Dono cases handle karein: underscore aur camelCase
-        const finalUrl = response.data.signingUrl || response.data.signing_url || response.data;
-
         res.json({
             success: true,
-            signingUrl: finalUrl
+            signingUrl: response.data.signingUrl || response.data.signing_url || response.data
         });
     } catch (error) {
-        console.error("DocuSign Initiation Error:", error.response?.data || error.message);
+        // Render logs mein asli error dekhne ke liye ye lines zaruri hain
+        console.error("DocuSign Initiation Detailed Error:");
+        console.error("Status:", error.response?.status); // Kya ye 404 hai ya 500?
+        console.error("Data:", error.response?.data);     // n8n ne kya message bheja?
+        console.error("Message:", error.message);         // Network timeout hai ya connection refused?
+        
         res.status(500).json({ error: 'Could not initiate signing process' });
     }
 };
