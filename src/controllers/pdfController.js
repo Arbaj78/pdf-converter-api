@@ -131,7 +131,7 @@ exports.initiateSigning = async (req, res) => {
     if (!uuid) return res.status(400).json({ error: 'UUID is required' });
 
     try {
-        const n8nWebhookUrl = 'https://n8n.srv871973.hstgr.cloud/webhook-test/docusign-initiate-signing'; 
+        const n8nWebhookUrl = 'https://n8n.srv871973.hstgr.cloud/webhook/docusign-initiate-signing'; 
         
         const response = await axios.post(n8nWebhookUrl, { uuid });
 
