@@ -130,44 +130,63 @@ exports.initiateSigning = async (req, res) => {
     if (!uuid) return res.status(400).json({ error: 'UUID is required' });
 
     try {
-        // PRODUCTION URL: Confirm karein ki subdomain srv871973 hi hai
-        const n8nWebhookUrl = "https://n8n.srv871973.hstgr.cloud/webhook-test/docusign-initiate-signing"; 
+        const n8nWebhookUrl = 'https://n8n.srv871973.hstgr.cloud/webhook/docusign-initiate-signing';
+        console.log(`[Render] Calling n8n for UUID: ${uuid}`);
         
-        console.log(`[Backend] Initiating DocuSign for UUID: ${uuid}`);
+        // Render optimized: 3 retries
+        let attempts = 0;
+        let signingUrl = null;
+        
+        while (attempts < 3 && !signingUrl) {
+            try {
+                attempts++;
+                console.log(`Attempt ${attempts}/3 for UUID: ${uuid}`);
+                
+                const response = await axios.post(n8nWebhookUrl, { uuid }, {
+                    timeout: 40000, // 40s per attempt
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'YourApp/1.0'
+                    }
+                });
+                
+                // Extract DocuSign URL from any format
+                signingUrl = response.data.signingUrl || 
+                           response.data.signing_url || 
+                           response.data.url || 
+                           response.data;
+                           
+                if (signingUrl) {
+                    console.log(`✓ Got signing URL: ${signingUrl.substring(0, 50)}...`);
+                    break;
+                }
+                
+            } catch (err) {
+                console.log(`Attempt ${attempts} failed:`, err.code || err.message);
+                
+                if (attempts < 3) {
+                    await delay(3000); // 3s retry delay
+                } else {
+                    throw new Error(`n8n failed after 3 attempts: ${err.code || err.message}`);
+                }
+            }
+        }
 
-        // RENDER FIX: Timeout add kiya hai (60 seconds)
-        const response = await axios.post(n8nWebhookUrl, { uuid }, {
-            timeout:  120000, 
-            headers: { 'Content-Type': 'application/json' }
-        });
+        if (!signingUrl) {
+            throw new Error('No signing URL received from n8n');
+        }
 
-        // Defensive mapping for different response formats
-        const signingUrl = response.data.signingUrl || response.data.signing_url || response.data.url || response.data;
-
+        // ✅ NO SUPABASE UPDATE - Direct response
         res.json({
             success: true,
-            signingUrl: signingUrl
+            signingUrl: signingUrl  // Exact format you want
         });
         
     } catch (error) {
-        console.error("--- DocuSign Initiation Error Details ---");
-        
-        if (error.response) {
-            // n8n ne response diya par status code error hai (4xx, 5xx)
-            console.error("Status:", error.response.status);
-            console.error("n8n Data:", error.response.data);
-        } else if (error.request) {
-            // Request chali gayi par n8n ne reply nahi diya (Network/Timeout)
-            console.error("No response from n8n. Code:", error.code);
-            if (error.code === 'ECONNABORTED') console.error("Result: Request Timed Out after 60s");
-            if (error.code === 'ENOTFOUND') console.error("Result: DNS Error - Check n8n URL");
-        } else {
-            console.error("Setup Error:", error.message);
-        }
-        
+        console.error("[Render] DocuSign Error:", error.message);
         res.status(500).json({ 
-            error: 'Could not initiate signing process',
-            code: error.code || 'UNKNOWN'
+            error: 'Signing URL generation failed',
+            code: error.code || 'TIMEOUT'
         });
     }
 };
