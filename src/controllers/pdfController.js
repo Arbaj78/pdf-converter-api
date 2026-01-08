@@ -135,48 +135,45 @@ exports.getResult = async (req, res) => {
 /* ==========================================================
    3. Initiate DocuSign Signing (FINAL FIXED)
 ========================================================== */
+// Option A: sync with longer timeout + simple retry
 exports.initiateSigning = async (req, res) => {
   const { uuid } = req.body;
   if (!uuid) return res.status(400).json({ error: 'UUID is required' });
 
+  const N8N_WEBHOOK_URL = process.env.N8N_DOCUSIGN_WEBHOOK;
+  if (!N8N_WEBHOOK_URL) return res.status(500).json({ error: 'Missing N8N_DOCUSIGN_WEBHOOK' });
+
+  const doPost = async () => {
+    return axios.post(N8N_WEBHOOK_URL, { uuid }, { timeout: 60000 }); // 60s
+  };
+
   try {
-    const N8N_WEBHOOK_URL = process.env.N8N_DOCUSIGN_WEBHOOK;
-
-    if (!N8N_WEBHOOK_URL) {
-      throw new Error('N8N_DOCUSIGN_WEBHOOK env variable is missing');
-    }
-
-    const response = await axios.post(
-      N8N_WEBHOOK_URL,
-      { uuid },
-      {
-        timeout: 15000,
-        headers: {
-          'Content-Type': 'application/json'
-        }
+    // one retry attempt if the first times out
+    try {
+      const response = await doPost();
+      return res.json({
+        success: true,
+        signingUrl: response.data?.signingUrl || response.data?.signing_url || response.data
+      });
+    } catch (firstErr) {
+      if (firstErr.code === 'ETIMEDOUT') {
+        // retry once
+        const response = await doPost();
+        return res.json({
+          success: true,
+          signingUrl: response.data?.signingUrl || response.data?.signing_url || response.data
+        });
       }
-    );
-
-    return res.json({
-      success: true,
-      signingUrl:
-        response.data?.signingUrl ||
-        response.data?.signing_url ||
-        response.data
-    });
-
+      throw firstErr;
+    }
   } catch (error) {
-    console.error('================ N8N ERROR ================');
+    console.error('=============== N8N ERROR ================');
     console.error('Message:', error.message);
     console.error('Code:', error.code);
     console.error('Has response:', !!error.response);
     console.error('Status:', error.response?.status);
     console.error('Data:', error.response?.data);
-    console.error('==========================================');
-
-    return res.status(500).json({
-      error: 'Could not initiate signing process',
-      reason: error.code || error.message
-    });
+    console.error('===========================================');
+    return res.status(500).json({ error: 'Could not initiate signing process', reason: error.code || error.message });
   }
 };
