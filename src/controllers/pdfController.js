@@ -1,15 +1,15 @@
 const path = require('path');
 const fs = require('fs');
-const axios = require('axios'); // n8n webhook trigger karne ke liye
+const axios = require('axios'); 
 const pdfService = require('../services/pdfService');
 const supabase = require('../config/supabase');
 const { cleanupFiles } = require('../utils/fileHelper');
 
-// Delay function taaki n8n/HubSpot par load na pade
+// Delay function taaki HubSpot API rate limits hit na ho
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ==========================================================
-// 1. PDF Conversion & Data Entry (n8n to Backend)
+// 1. PDF Conversion & Data Entry
 // ==========================================================
 exports.handleConversion = async (req, res) => {
     if (!req.file) return res.status(400).send('No file uploaded');
@@ -39,7 +39,6 @@ exports.handleConversion = async (req, res) => {
         // PDF to Images
         await pdfService.convertPdfToImages(filePath, outputDir, filePrefix, terms_conditions_page_no);
 
-        // Read and Sort Images
         const allFiles = fs.readdirSync(outputDir);
         const generatedImages = allFiles
             .filter(f => f.startsWith(filePrefix) && f.endsWith('.jpg'))
@@ -51,10 +50,11 @@ exports.handleConversion = async (req, res) => {
 
         generatedImagesFullPaths = generatedImages.map(img => path.join(outputDir, img));
 
-        // HubSpot Upload with Delay
+        // HubSpot Upload
         const imageUrls = [];
         for (const imgName of generatedImages) {
             const fullImgPath = path.join(outputDir, imgName);
+            // HubSpot upload ke liye 1s ka delay taaki n8n/HubSpot overwhelm na ho
             const publicUrl = await pdfService.uploadToHubSpot(fullImgPath, imgName);
             
             if (publicUrl) {
@@ -85,7 +85,7 @@ exports.handleConversion = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("[Controller] Error:", error);
+        console.error("[Controller] HandleConversion Error:", error.message);
         res.status(500).json({ error: 'Processing failed' });
     } finally {
         const filesToDelete = [filePath, ...generatedImagesFullPaths];
@@ -94,14 +94,13 @@ exports.handleConversion = async (req, res) => {
 };
 
 // ==========================================================
-// 2. Get Result (Frontend Status & Data Check)
+// 2. Get Result (Frontend Check)
 // ==========================================================
 exports.getResult = async (req, res) => {
     const { id } = req.params;
     try {
         const { data, error } = await supabase
             .from('pdf_conversions')
-            // Status track karne ke liye is_signed aur signed_pdf_url add kiya
             .select('image_urls, created_at, total_investment_amount, permit_fee, manufacturer, is_signed, signed_pdf_url')
             .eq('id', id)
             .single();
@@ -114,7 +113,7 @@ exports.getResult = async (req, res) => {
             total_investment_amount: data.total_investment_amount,
             permit_fee: data.permit_fee,
             manufacturer: data.manufacturer,
-            is_signed: data.is_signed || false, // Status for frontend check
+            is_signed: data.is_signed || false,
             signed_pdf_url: data.signed_pdf_url || null,
             date: data.created_at
         });
@@ -124,28 +123,51 @@ exports.getResult = async (req, res) => {
 };
 
 // ==========================================================
-// 3. Initiate DocuSign Signing (Frontend to n8n)
+// 3. Initiate DocuSign Signing (UPDATED FOR RENDER)
 // ==========================================================
 exports.initiateSigning = async (req, res) => {
     const { uuid } = req.body;
     if (!uuid) return res.status(400).json({ error: 'UUID is required' });
 
     try {
+        // PRODUCTION URL: Confirm karein ki subdomain srv871973 hi hai
         const n8nWebhookUrl = 'https://n8n.srv871973.hstgr.cloud/webhook/docusign-initiate-signing'; 
         
-        const response = await axios.post(n8nWebhookUrl, { uuid });
-        
+        console.log(`[Backend] Initiating DocuSign for UUID: ${uuid}`);
+
+        // RENDER FIX: Timeout add kiya hai (60 seconds)
+        const response = await axios.post(n8nWebhookUrl, { uuid }, {
+            timeout: 60000, 
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        // Defensive mapping for different response formats
+        const signingUrl = response.data.signingUrl || response.data.signing_url || response.data.url || response.data;
+
         res.json({
             success: true,
-            signingUrl: response.data.signingUrl || response.data.signing_url || response.data
+            signingUrl: signingUrl
         });
-    } catch (error) {
-        // Render logs mein asli error dekhne ke liye ye lines zaruri hain
-        console.error("DocuSign Initiation Detailed Error:");
-        console.error("Status:", error.response?.status); // Kya ye 404 hai ya 500?
-        console.error("Data:", error.response?.data);     // n8n ne kya message bheja?
-        console.error("Message:", error.message);         // Network timeout hai ya connection refused?
         
-        res.status(500).json({ error: 'Could not initiate signing process' });
+    } catch (error) {
+        console.error("--- DocuSign Initiation Error Details ---");
+        
+        if (error.response) {
+            // n8n ne response diya par status code error hai (4xx, 5xx)
+            console.error("Status:", error.response.status);
+            console.error("n8n Data:", error.response.data);
+        } else if (error.request) {
+            // Request chali gayi par n8n ne reply nahi diya (Network/Timeout)
+            console.error("No response from n8n. Code:", error.code);
+            if (error.code === 'ECONNABORTED') console.error("Result: Request Timed Out after 60s");
+            if (error.code === 'ENOTFOUND') console.error("Result: DNS Error - Check n8n URL");
+        } else {
+            console.error("Setup Error:", error.message);
+        }
+        
+        res.status(500).json({ 
+            error: 'Could not initiate signing process',
+            code: error.code || 'UNKNOWN'
+        });
     }
 };
