@@ -140,17 +140,13 @@ exports.initiateSigning = async (req, res) => {
   const N8N_WEBHOOK_URL = "https://n8n.srv871973.hstgr.cloud/webhook/docusign-initiate-signing";
 
   // Trigger n8n background mein chalega
-  axios.post(N8N_WEBHOOK_URL, { uuid })
-    .then(() => {
-      console.log('[n8n] Triggered successfully for uuid:', uuid);
-    })
-    .catch(err => {
-      console.error('[n8n] Trigger failed:', err.message);
-    });
-
-  // Turant response bhej do taaki frontend polling shuru kar sake
-  return res.status(202).json({
-    success: true,
-    message: 'Signing initiated'
+ axios.post(N8N_WEBHOOK_URL, { uuid }, { timeout: 5000 })
+  .then(() => {
+    console.log('[n8n] Triggered successfully:', uuid);
+  })
+  .catch(err => {
+    console.error('[n8n] Trigger failed');
+    console.error('Message:', err.message);
+    console.error('Code:', err.code);
   });
 };
