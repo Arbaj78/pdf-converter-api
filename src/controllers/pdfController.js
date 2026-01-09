@@ -144,7 +144,7 @@ exports.initiateSigning = async (req, res) => {
   if (!N8N_WEBHOOK_URL) return res.status(500).json({ error: 'Missing N8N_DOCUSIGN_WEBHOOK' });
 
   const doPost = async () => {
-    return axios.post(N8N_WEBHOOK_URL, { uuid }, { timeout: 60000 }); // 60s
+    return axios.post(N8N_WEBHOOK_URL, { uuid }, { timeout: 120000 }); // 60s
   };
 
   try {
