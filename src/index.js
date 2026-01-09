@@ -10,7 +10,6 @@ app.use(express.json());
 
 // Routes use karein
 app.use('/api', pdfRoutes);
-;
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

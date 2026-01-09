@@ -138,40 +138,25 @@ exports.getResult = async (req, res) => {
 // Option A: sync with longer timeout + simple retry
 exports.initiateSigning = async (req, res) => {
   const { uuid } = req.body;
-  if (!uuid) return res.status(400).json({ error: 'UUID is required' });
+  if (!uuid) return res.status(400).json({ error: 'UUID required' });
 
-  const N8N_WEBHOOK_URL = process.env.N8N_DOCUSIGN_WEBHOOK;
-
-  const doPost = async (attempt = 1) => {
-    try {
-      console.log(`Attempt ${attempt} to N8N...`);
-      const response = await axios.post(N8N_WEBHOOK_URL, { uuid }, { 
-        timeout: 180000,  // 3 minutes for cold start
-        headers: { 'Connection': 'keep-alive' }
-      });
-      return response;
-    } catch (err) {
-      console.error(`Attempt ${attempt} failed:`, err.code, err.message);
-      if (attempt < 4 && (err.code === 'ETIMEDOUT' || err.response?.status >= 500)) {
-        await delay(3000 * attempt);  // Backoff: 3s, 6s, 9s
-        return doPost(attempt + 1);
-      }
-      throw err;
-    }
-  };
-
-  try {
-    const response = await doPost();
-    return res.json({
-      success: true,
-      signingUrl: response.data?.signingUrl || response.data
-    });
-  } catch (error) {
-    console.error('Final error:', error.message, error.code);
-    return res.status(500).json({ 
-      error: 'Signing init failed', 
-      reason: error.code || error.message,
-      retryCount: 4
-    });
+  const N8N_WEBHOOK_URL = "https://n8n.srv871973.hstgr.cloud/webhook/docusign-initiate-signing";
+  if (!N8N_WEBHOOK_URL) {
+    return res.status(500).json({ error: 'Missing N8N webhook URL' });
   }
+
+  // 🚀 Trigger n8n ASYNC (do NOT await)
+  axios.post(N8N_WEBHOOK_URL, { uuid })
+    .then(() => {
+      console.log('[n8n] Triggered successfully for uuid:', uuid);
+    })
+    .catch(err => {
+      console.error('[n8n] Trigger failed:', err.code || err.message);
+    });
+
+  // ✅ Respond immediately (no timeout risk)
+  return res.status(202).json({
+    success: true,
+    message: 'Signing initiated'
+  });
 };
