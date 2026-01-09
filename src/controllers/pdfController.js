@@ -26,7 +26,7 @@ exports.handleConversion = async (req, res) => {
   } = req.body;
 
   if (!uuid) {
-    if (req.file.path) fs.unlinkSync(req.file.path);
+    if (req.file?.path) fs.unlinkSync(req.file.path);
     return res.status(400).json({ error: 'UUID is required' });
   }
 
@@ -97,7 +97,7 @@ exports.handleConversion = async (req, res) => {
 };
 
 /* ==========================================================
-   2. Get Result
+   2. Get Result (UPDATED for signing_url)
 ========================================================== */
 exports.getResult = async (req, res) => {
   const { id } = req.params;
@@ -106,7 +106,16 @@ exports.getResult = async (req, res) => {
     const { data, error } = await supabase
       .from('pdf_conversions')
       .select(
-        'image_urls, created_at, total_investment_amount, permit_fee, manufacturer, is_signed, signed_pdf_url'
+        `
+        image_urls,
+        created_at,
+        total_investment_amount,
+        permit_fee,
+        manufacturer,
+        is_signed,
+        signed_pdf_url,
+        signing_url
+        `
       )
       .eq('id', id)
       .single();
@@ -117,12 +126,13 @@ exports.getResult = async (req, res) => {
 
     return res.json({
       success: true,
-      images: data.image_urls,
+      images: data.image_urls || [],
       total_investment_amount: data.total_investment_amount,
       permit_fee: data.permit_fee,
       manufacturer: data.manufacturer,
       is_signed: data.is_signed || false,
       signed_pdf_url: data.signed_pdf_url || null,
+      signing_url: data.signing_url || null,   // 🔥 IMPORTANT
       date: data.created_at
     });
 
@@ -133,19 +143,16 @@ exports.getResult = async (req, res) => {
 };
 
 /* ==========================================================
-   3. Initiate DocuSign Signing (FINAL FIXED)
+   3. Initiate DocuSign Signing (OPTION-1 SAFE)
 ========================================================== */
-// Option A: sync with longer timeout + simple retry
 exports.initiateSigning = async (req, res) => {
   const { uuid } = req.body;
   if (!uuid) return res.status(400).json({ error: 'UUID required' });
 
-  const N8N_WEBHOOK_URL = "https://n8n.srv871973.hstgr.cloud/webhook/docusign-initiate-signing";
-  if (!N8N_WEBHOOK_URL) {
-    return res.status(500).json({ error: 'Missing N8N webhook URL' });
-  }
+  const N8N_WEBHOOK_URL =
+    'https://n8n.srv871973.hstgr.cloud/webhook/docusign-initiate-signing';
 
-  // 🚀 Trigger n8n ASYNC (do NOT await)
+  // Fire-and-forget (FREE RENDER SAFE)
   axios.post(N8N_WEBHOOK_URL, { uuid })
     .then(() => {
       console.log('[n8n] Triggered successfully for uuid:', uuid);
@@ -154,7 +161,7 @@ exports.initiateSigning = async (req, res) => {
       console.error('[n8n] Trigger failed:', err.code || err.message);
     });
 
-  // ✅ Respond immediately (no timeout risk)
+  // Immediate response (no ETIMEDOUT)
   return res.status(202).json({
     success: true,
     message: 'Signing initiated'
