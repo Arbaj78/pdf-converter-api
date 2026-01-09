@@ -12,7 +12,7 @@ const { cleanupFiles } = require('../utils/fileHelper');
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /* ==========================================================
-   1. PDF Conversion & Data Entry
+   1. PDF Conversion & Data Entry (No Changes Needed)
 ========================================================== */
 exports.handleConversion = async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
@@ -26,7 +26,7 @@ exports.handleConversion = async (req, res) => {
   } = req.body;
 
   if (!uuid) {
-    if (req.file?.path) fs.unlinkSync(req.file.path);
+    if (req.file.path) fs.unlinkSync(req.file.path);
     return res.status(400).json({ error: 'UUID is required' });
   }
 
@@ -41,7 +41,6 @@ exports.handleConversion = async (req, res) => {
       fs.mkdirSync(outputDir, { recursive: true });
     }
 
-    // Convert PDF → Images
     await pdfService.convertPdfToImages(
       filePath,
       outputDir,
@@ -49,7 +48,6 @@ exports.handleConversion = async (req, res) => {
       terms_conditions_page_no
     );
 
-    // Read & sort generated images
     const generatedImages = fs.readdirSync(outputDir)
       .filter(f => f.startsWith(filePrefix) && f.endsWith('.jpg'))
       .sort((a, b) => parseInt(a.match(/\d+/)) - parseInt(b.match(/\d+/)));
@@ -58,7 +56,6 @@ exports.handleConversion = async (req, res) => {
       path.join(outputDir, img)
     );
 
-    // Upload images to HubSpot
     const imageUrls = [];
     for (const imgName of generatedImages) {
       const fullImgPath = path.join(outputDir, imgName);
@@ -67,7 +64,6 @@ exports.handleConversion = async (req, res) => {
       await delay(1000);
     }
 
-    // Update Supabase
     const { error } = await supabase
       .from('pdf_conversions')
       .update({
@@ -90,14 +86,13 @@ exports.handleConversion = async (req, res) => {
   } catch (error) {
     console.error('[handleConversion]', error);
     return res.status(500).json({ error: 'Processing failed' });
-
   } finally {
     cleanupFiles([filePath, ...generatedImagesFullPaths]);
   }
 };
 
 /* ==========================================================
-   2. Get Result (UPDATED for signing_url)
+   2. Get Result (UPDATED FOR POLLING)
 ========================================================== */
 exports.getResult = async (req, res) => {
   const { id } = req.params;
@@ -106,16 +101,8 @@ exports.getResult = async (req, res) => {
     const { data, error } = await supabase
       .from('pdf_conversions')
       .select(
-        `
-        image_urls,
-        created_at,
-        total_investment_amount,
-        permit_fee,
-        manufacturer,
-        is_signed,
-        signed_pdf_url,
-        signing_url
-        `
+        // 🔹 Added 'signing_url' in select query
+        'image_urls, created_at, total_investment_amount, permit_fee, manufacturer, is_signed, signed_pdf_url, signing_url'
       )
       .eq('id', id)
       .single();
@@ -126,13 +113,14 @@ exports.getResult = async (req, res) => {
 
     return res.json({
       success: true,
-      images: data.image_urls || [],
+      images: data.image_urls,
       total_investment_amount: data.total_investment_amount,
       permit_fee: data.permit_fee,
       manufacturer: data.manufacturer,
       is_signed: data.is_signed || false,
       signed_pdf_url: data.signed_pdf_url || null,
-      signing_url: data.signing_url || null,   // 🔥 IMPORTANT
+      // 🔹 Send signing_url to frontend so it can stop loading and redirect
+      signing_url: data.signing_url || null,
       date: data.created_at
     });
 
@@ -143,25 +131,24 @@ exports.getResult = async (req, res) => {
 };
 
 /* ==========================================================
-   3. Initiate DocuSign Signing (OPTION-1 SAFE)
+   3. Initiate DocuSign Signing (Trigger n8n)
 ========================================================== */
 exports.initiateSigning = async (req, res) => {
   const { uuid } = req.body;
   if (!uuid) return res.status(400).json({ error: 'UUID required' });
 
-  const N8N_WEBHOOK_URL =
-    'https://n8n.srv871973.hstgr.cloud/webhook/docusign-initiate-signing';
+  const N8N_WEBHOOK_URL = "https://n8n.srv871973.hstgr.cloud/webhook/docusign-initiate-signing";
 
-  // Fire-and-forget (FREE RENDER SAFE)
+  // Trigger n8n background mein chalega
   axios.post(N8N_WEBHOOK_URL, { uuid })
     .then(() => {
       console.log('[n8n] Triggered successfully for uuid:', uuid);
     })
     .catch(err => {
-      console.error('[n8n] Trigger failed:', err.code || err.message);
+      console.error('[n8n] Trigger failed:', err.message);
     });
 
-  // Immediate response (no ETIMEDOUT)
+  // Turant response bhej do taaki frontend polling shuru kar sake
   return res.status(202).json({
     success: true,
     message: 'Signing initiated'
