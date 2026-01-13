@@ -22,7 +22,9 @@ exports.handleConversion = async (req, res) => {
     terms_conditions_page_no,
     total_investment_amount,
     permit_fee,
-    manufacturer
+    manufacturer,
+    customer_full_name, 
+    customer_email
   } = req.body;
 
   if (!uuid) {
@@ -71,7 +73,9 @@ exports.handleConversion = async (req, res) => {
         processed_pages: terms_conditions_page_no || 'all',
         total_investment_amount,
         permit_fee,
-        manufacturer
+        manufacturer,
+        customer_full_name, // <-- Save to DB
+        customer_email      // <-- Save to D
       })
       .eq('id', uuid);
 
@@ -102,7 +106,7 @@ exports.getResult = async (req, res) => {
       .from('pdf_conversions')
       .select(
         // 🔹 Added 'signing_url' in select query
-        'image_urls, created_at, total_investment_amount, permit_fee, manufacturer, is_signed, signed_pdf_url, signing_url'
+        'image_urls, created_at, total_investment_amount, permit_fee, manufacturer, is_signed, signed_pdf_url, signing_url, customer_full_name, customer_email'
       )
       .eq('id', id)
       .single();
@@ -119,8 +123,9 @@ exports.getResult = async (req, res) => {
       manufacturer: data.manufacturer,
       is_signed: data.is_signed || false,
       signed_pdf_url: data.signed_pdf_url || null,
-      // 🔹 Send signing_url to frontend so it can stop loading and redirect
       signing_url: data.signing_url || null,
+      customer_full_name: data.customer_full_name,
+      customer_email: data.customer_email,
       date: data.created_at
     });
 
@@ -130,23 +135,3 @@ exports.getResult = async (req, res) => {
   }
 };
 
-/* ==========================================================
-   3. Initiate DocuSign Signing (Trigger n8n)
-========================================================== */
-exports.initiateSigning = async (req, res) => {
-  const { uuid } = req.body;
-  if (!uuid) return res.status(400).json({ error: 'UUID required' });
-
-  const N8N_WEBHOOK_URL = "https://n8n.srv871973.hstgr.cloud/webhook/docusign-initiate-signing";
-
-  // Trigger n8n background mein chalega
- axios.post(N8N_WEBHOOK_URL, { uuid }, { timeout: 5000 })
-  .then(() => {
-    console.log('[n8n] Triggered successfully:', uuid);
-  })
-  .catch(err => {
-    console.error('[n8n] Trigger failed');
-    console.error('Message:', err.message);
-    console.error('Code:', err.code);
-  });
-};

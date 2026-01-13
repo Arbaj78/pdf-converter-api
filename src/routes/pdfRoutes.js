@@ -11,6 +11,6 @@ router.post('/convert', upload.single('file'), pdfController.handleConversion);
 router.get('/result/:id', pdfController.getResult);
 
 // 3. New: Initiate DocuSign signing process via n8n
-router.post('/initiate-sign', pdfController.initiateSigning);
+// router.post('/initiate-sign', pdfController.initiateSigning);
 
 module.exports = router;
