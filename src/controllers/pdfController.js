@@ -64,11 +64,17 @@ exports.handleConversion = async (req, res) => {
        - This happens BEFORE image conversion
     ====================================================== */
     const insertAt = parseInt(insert_index || 3, 10); // default = 3rd page
+    const totalInv = parseFloat(total_investment_amount || 0);
+    const permit = parseFloat(permit_fee || 0);
 
-    const result = await pdfEditor.insertAndAppendSignaturePages(
-      originalPdfPath,
-      insertAt
-    );
+const result = await pdfEditor.insertAndAppendSignaturePages(
+  originalPdfPath,
+  insertAt,
+  customer_full_name || '',
+  totalInv,
+  permit,
+  manufacturer || ''
+);
 
     mergedPdfPath = result.mergedPath;
     anchorString = result.anchorString;

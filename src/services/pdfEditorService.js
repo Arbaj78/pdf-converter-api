@@ -1,151 +1,202 @@
-// src/services/pdfEditorService.js
-
 const fs = require('fs');
 const path = require('path');
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
 
-/**
- * Unique anchor for DocuSign
- * (Used only on RIGHT SIDE signature area)
- */
-const genAnchor = () =>
+/** Anchors */
+const genSignAnchor = () =>
   `##SIGN_HERE_${Date.now()}_${Math.floor(Math.random() * 10000)}##`;
 
-/**
- * Draws the custom signature page exactly like the screenshot
- */
-async function drawSignatureLayout(page, width, height, anchorText) {
+const DATE_ANCHOR = '##DATE_SIGNED##';
+
+/** Currency formatter */
+const formatAmount = (val) =>
+  `$${new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(val || 0))}`;
+
+/* ================= TABLE ================= */
+async function drawAmountTable(page, width, height, total, permitFee, manufacturer) {
   const font = await page.doc.embedFont(StandardFonts.Helvetica);
 
-  // Layout constants
-  const marginX = 40;
-  const columnGap = 40;
-  const columnWidth = (width - marginX * 2 - columnGap) / 2;
+  const margin = 40;
+  const tableWidth = width - margin * 2;
+  const rightX = margin + tableWidth;
 
-  const topLineY = height - 120;
-  const textY = topLineY - 25;
-  const bottomLineY = textY - 30;
+  const startY = height - 60;
+  const gap = 32;
 
-  const leftX = marginX;
-  const rightX = marginX + columnWidth + columnGap;
+  const row1Y = startY;
+  const row2Y = startY - gap;
 
-  // ---------- LEFT COLUMN ----------
-  // Top line
-  page.drawLine({
-    start: { x: leftX, y: topLineY },
-    end: { x: leftX + columnWidth, y: topLineY },
-    thickness: 1,
-    color: rgb(0, 0, 0),
-  });
+  const totalAmount = formatAmount(total);
+  const netAmount = formatAmount(Number(total) - Number(permitFee));
 
-  // Name
-  page.drawText('customer signature', {
-    x: leftX,
-    y: textY,
-    size: 12,
-    font,
-  });
+  page.drawText(
+    'Permit Preparation & Engineering Services (Excludes City Permit Fees)',
+    { x: margin, y: row1Y, size: 10, font }
+  );
 
-  // Date label
-  page.drawText('Date', {
-    x: leftX,
-    y: textY - 18,
+  page.drawText(totalAmount, {
+    x: rightX - totalAmount.length * 6,
+    y: row1Y,
     size: 10,
     font,
   });
 
-  // Bottom line
   page.drawLine({
-    start: { x: leftX, y: bottomLineY },
-    end: { x: leftX + columnWidth, y: bottomLineY },
-    thickness: 1,
-    color: rgb(0, 0, 0),
+    start: { x: margin, y: row1Y - 12 },
+    end: { x: rightX, y: row1Y - 12 },
+    thickness: 0.7,
   });
 
-  // ---------- RIGHT COLUMN ----------
-  // Top line
-  page.drawLine({
-    start: { x: rightX, y: topLineY },
-    end: { x: rightX + columnWidth, y: topLineY },
-    thickness: 1,
-    color: rgb(0, 0, 0),
-  });
-
-  // Sales Office
-  page.drawText('Sales Office', {
-    x: rightX,
-    y: textY,
-    size: 12,
-    font,
-  });
-
-  // Date label
-  page.drawText('Date', {
-    x: rightX,
-    y: textY - 18,
+  page.drawText(manufacturer || 'Manufacturer', {
+    x: margin,
+    y: row2Y,
     size: 10,
     font,
   });
 
-  // DocuSign anchor (RIGHT SIDE ONLY)
-  page.drawText(anchorText, {
-    x: rightX,
-    y: textY - 35,
-    size: 8,
+  page.drawText(netAmount, {
+    x: rightX - netAmount.length * 6,
+    y: row2Y,
+    size: 10,
     font,
-    color: rgb(1, 1, 1), // invisible but detectable
   });
 
-  // Bottom line
   page.drawLine({
-    start: { x: rightX, y: bottomLineY },
-    end: { x: rightX + columnWidth, y: bottomLineY },
-    thickness: 1,
-    color: rgb(0, 0, 0),
+    start: { x: margin, y: row2Y - 12 },
+    end: { x: rightX, y: row2Y - 12 },
+    thickness: 0.7,
   });
 }
 
-/**
- * Insert signature page at given index AND append at last page
- */
-async function insertAndAppendSignaturePages(originalPath, insertIndex1Based) {
-  if (!fs.existsSync(originalPath)) {
-    throw new Error('Original PDF not found');
-  }
+/* ================= SIGNATURE ================= */
+async function drawSignatureLayout(page, width, height, signAnchor, customerName) {
+  const font = await page.doc.embedFont(StandardFonts.Helvetica);
 
+  const margin = 40;
+  const gap = 40;
+  const colWidth = (width - margin * 2 - gap) / 2;
+
+  const baseY = height - 220;
+
+  const signAnchorY = baseY + 20;
+  const nameY = baseY - 10;
+  const nameLineY = nameY - 10;
+  const dateAnchorY = nameLineY - 18;
+  const dateLineY = dateAnchorY - 10;
+
+  const leftX = margin;
+  const rightX = margin + colWidth + gap;
+
+  /* ---------- CUSTOMER ---------- */
+
+  // Signature anchor
+  page.drawText(signAnchor, {
+    x: leftX + 2,
+    y: signAnchorY,
+    size: 8,
+    font,
+    color: rgb(1, 1, 1),
+  });
+
+  // Name
+  page.drawText(customerName, {
+    x: leftX,
+    y: nameY,
+    size: 12,
+    font,
+  });
+
+  page.drawLine({
+    start: { x: leftX, y: nameLineY },
+    end: { x: leftX + colWidth, y: nameLineY },
+    thickness: 1,
+  });
+
+  // Date anchor (IMPORTANT)
+  page.drawText(DATE_ANCHOR, {
+    x: leftX + 2,
+    y: dateAnchorY,
+    size: 8,
+    font,
+    color: rgb(1, 1, 1),
+  });
+
+  page.drawLine({
+    start: { x: leftX, y: dateLineY },
+    end: { x: leftX + colWidth, y: dateLineY },
+    thickness: 1,
+  });
+
+  /* ---------- SALES OFFICE ---------- */
+
+  page.drawText('Sales Office', {
+    x: rightX,
+    y: nameY,
+    size: 12,
+    font,
+  });
+
+  page.drawLine({
+    start: { x: rightX, y: nameLineY },
+    end: { x: rightX + colWidth, y: nameLineY },
+    thickness: 1,
+  });
+
+  page.drawLine({
+    start: { x: rightX, y: dateLineY },
+    end: { x: rightX + colWidth, y: dateLineY },
+    thickness: 1,
+  });
+}
+
+/* ================= MAIN ================= */
+async function insertAndAppendSignaturePages(
+  originalPath,
+  insertIndex1Based,
+  customerName,
+  total,
+  permitFee,
+  manufacturer
+) {
   const bytes = fs.readFileSync(originalPath);
   const pdfDoc = await PDFDocument.load(bytes);
 
-  const pages = pdfDoc.getPages();
-  const { width, height } = pages[0].getSize();
+  const { width, height } = pdfDoc.getPages()[0].getSize();
 
-  const insertIndex = Math.max(0, insertIndex1Based - 1);
-  const anchorString = genAnchor();
+  const signAnchor = genSignAnchor();
+  const index = Math.max(0, insertIndex1Based - 1);
 
-  // Pad pages if index is greater than page count
-  while (pdfDoc.getPageCount() < insertIndex) {
+  while (pdfDoc.getPageCount() < index) {
     pdfDoc.addPage([width, height]);
   }
 
-  // ---------- INSERT PAGE ----------
-  const insertedPage = pdfDoc.insertPage(insertIndex, [width, height]);
-  insertedPage.doc = pdfDoc;
-  await drawSignatureLayout(insertedPage, width, height, anchorString);
+  const insertPage = pdfDoc.insertPage(index, [width, height]);
+  insertPage.doc = pdfDoc;
 
-  // ---------- APPEND PAGE ----------
-  const appendedPage = pdfDoc.addPage([width, height]);
-  appendedPage.doc = pdfDoc;
-  await drawSignatureLayout(appendedPage, width, height, anchorString);
+  await drawAmountTable(insertPage, width, height, total, permitFee, manufacturer);
+  await drawSignatureLayout(insertPage, width, height, signAnchor, customerName);
 
-  // Save merged PDF
-  const outDir = path.dirname(originalPath);
-  const mergedName = `merged-${Date.now()}-${path.basename(originalPath)}`;
-  const mergedPath = path.join(outDir, mergedName);
+  const lastPage = pdfDoc.addPage([width, height]);
+  lastPage.doc = pdfDoc;
 
-  const mergedBytes = await pdfDoc.save();
-  fs.writeFileSync(mergedPath, mergedBytes);
+  await drawAmountTable(lastPage, width, height, total, permitFee, manufacturer);
+  await drawSignatureLayout(lastPage, width, height, signAnchor, customerName);
 
-  return { mergedPath, anchorString };
+  const outPath = path.join(
+    path.dirname(originalPath),
+    `merged-${Date.now()}-${path.basename(originalPath)}`
+  );
+
+  fs.writeFileSync(outPath, await pdfDoc.save());
+
+  return {
+    mergedPath: outPath,
+    anchorString: signAnchor,
+    dateAnchorString: DATE_ANCHOR,
+  };
 }
 
 module.exports = {
