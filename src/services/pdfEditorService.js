@@ -2,20 +2,20 @@ const fs = require('fs');
 const path = require('path');
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
 
-/** Anchors */
+/* ================== ANCHORS ================== */
 const genSignAnchor = () =>
   `##SIGN_HERE_${Date.now()}_${Math.floor(Math.random() * 10000)}##`;
 
 const DATE_ANCHOR = '##DATE_SIGNED##';
 
-/** Currency formatter */
+/* ================== HELPERS ================== */
 const formatAmount = (val) =>
   `$${new Intl.NumberFormat('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(Number(val || 0))}`;
 
-/* ================= TABLE ================= */
+/* ================== TABLE ================== */
 async function drawAmountTable(page, width, height, total, permitFee, manufacturer) {
   const font = await page.doc.embedFont(StandardFonts.Helvetica);
 
@@ -32,6 +32,7 @@ async function drawAmountTable(page, width, height, total, permitFee, manufactur
   const totalAmount = formatAmount(total);
   const netAmount = formatAmount(Number(total) - Number(permitFee));
 
+  // Row 1
   page.drawText(
     'Permit Preparation & Engineering Services (Excludes City Permit Fees)',
     { x: margin, y: row1Y, size: 10, font }
@@ -50,6 +51,7 @@ async function drawAmountTable(page, width, height, total, permitFee, manufactur
     thickness: 0.7,
   });
 
+  // Row 2
   page.drawText(manufacturer || 'Manufacturer', {
     x: margin,
     y: row2Y,
@@ -71,7 +73,7 @@ async function drawAmountTable(page, width, height, total, permitFee, manufactur
   });
 }
 
-/* ================= SIGNATURE ================= */
+/* ================== SIGNATURE ================== */
 async function drawSignatureLayout(page, width, height, signAnchor, customerName) {
   const font = await page.doc.embedFont(StandardFonts.Helvetica);
 
@@ -92,7 +94,7 @@ async function drawSignatureLayout(page, width, height, signAnchor, customerName
 
   /* ---------- CUSTOMER ---------- */
 
-  // Signature anchor
+  // Signature anchor (DocuSign)
   page.drawText(signAnchor, {
     x: leftX + 2,
     y: signAnchorY,
@@ -101,8 +103,8 @@ async function drawSignatureLayout(page, width, height, signAnchor, customerName
     color: rgb(1, 1, 1),
   });
 
-  // Name
-  page.drawText(customerName, {
+  // Customer name
+  page.drawText(customerName || '', {
     x: leftX,
     y: nameY,
     size: 12,
@@ -115,7 +117,7 @@ async function drawSignatureLayout(page, width, height, signAnchor, customerName
     thickness: 1,
   });
 
-  // Date anchor (IMPORTANT)
+  // Date anchor (DocuSign date)
   page.drawText(DATE_ANCHOR, {
     x: leftX + 2,
     y: dateAnchorY,
@@ -152,7 +154,7 @@ async function drawSignatureLayout(page, width, height, signAnchor, customerName
   });
 }
 
-/* ================= MAIN ================= */
+/* ================== MAIN ================== */
 async function insertAndAppendSignaturePages(
   originalPath,
   insertIndex1Based,
@@ -167,18 +169,27 @@ async function insertAndAppendSignaturePages(
   const { width, height } = pdfDoc.getPages()[0].getSize();
 
   const signAnchor = genSignAnchor();
-  const index = Math.max(0, insertIndex1Based - 1);
 
-  while (pdfDoc.getPageCount() < index) {
-    pdfDoc.addPage([width, height]);
+  // ✅ INDUSTRY LOGIC
+  const shouldInsert =
+    Number.isInteger(insertIndex1Based) && insertIndex1Based > 0;
+
+  const insertIndex = shouldInsert ? insertIndex1Based - 1 : null;
+
+  /* ---------- INSERT PAGE (ONLY IF VALID INDEX) ---------- */
+  if (insertIndex !== null) {
+    while (pdfDoc.getPageCount() < insertIndex) {
+      pdfDoc.addPage([width, height]);
+    }
+
+    const insertPage = pdfDoc.insertPage(insertIndex, [width, height]);
+    insertPage.doc = pdfDoc;
+
+    await drawAmountTable(insertPage, width, height, total, permitFee, manufacturer);
+    await drawSignatureLayout(insertPage, width, height, signAnchor, customerName);
   }
 
-  const insertPage = pdfDoc.insertPage(index, [width, height]);
-  insertPage.doc = pdfDoc;
-
-  await drawAmountTable(insertPage, width, height, total, permitFee, manufacturer);
-  await drawSignatureLayout(insertPage, width, height, signAnchor, customerName);
-
+  /* ---------- APPEND PAGE (ALWAYS) ---------- */
   const lastPage = pdfDoc.addPage([width, height]);
   lastPage.doc = pdfDoc;
 

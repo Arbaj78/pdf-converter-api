@@ -63,7 +63,11 @@ exports.handleConversion = async (req, res) => {
        - Also insert same page at last
        - This happens BEFORE image conversion
     ====================================================== */
-    const insertAt = parseInt(insert_index || 3, 10); // default = 3rd page
+    const insertAt =
+  Number.isInteger(Number(insert_index)) && Number(insert_index) > 0
+    ? Number(insert_index)
+    : null;
+
     const totalInv = parseFloat(total_investment_amount || 0);
     const permit = parseFloat(permit_fee || 0);
 
