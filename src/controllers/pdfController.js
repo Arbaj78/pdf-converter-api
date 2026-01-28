@@ -2,36 +2,52 @@
 
 const path = require('path');
 const fs = require('fs');
-const axios = require('axios');
 
-/**
- * 🔹 NEW: pdfEditorService
- * This service is responsible ONLY for:
- * - inserting a custom page at a given index
- * - inserting the same page at the end
- * - returning merged PDF path + anchor string
- */
+const { validateService } = require('../utils/serviceValidator');
+const { resolvePdfTable } = require('../services/pdfTableResolver');
+
 const pdfEditor = require('../services/pdfEditorService');
-
 const pdfService = require('../services/pdfService');
 const supabase = require('../config/supabase');
 const { cleanupFiles } = require('../utils/fileHelper');
 
-// ------------------------------------
-// Utility: Delay (unchanged)
-// ------------------------------------
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+async function markRecordFailed(table, id, reason) {
+  if (!table || !id) return;
+  try {
+    await supabase
+      .from(table)
+      .update({
+        pdf_status: 'failed',
+        error_message: reason ? String(reason).slice(0, 2000) : null
+      })
+      .eq('id', id);
+  } catch (err) {
+    console.error('[markRecordFailed]', err);
+  }
+}
+
 /* ==========================================================
-   1. PDF Conversion + Signature Page Injection (UPDATED)
+   1. Handle PDF Conversion
 ========================================================== */
 exports.handleConversion = async (req, res) => {
+  let service;
+  let table;
+
+  try {
+    service = validateService(req.body.service);
+    table = resolvePdfTable(service);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
   const {
     uuid,
-    terms_conditions_page_no, // existing use: how many pages to convert to images
-    insert_index,             // 🔹 NEW: page index where signature page must be inserted
+    terms_conditions_page_no,
+    insert_index,
     total_investment_amount,
     permit_fee,
     manufacturer,
@@ -40,7 +56,7 @@ exports.handleConversion = async (req, res) => {
   } = req.body;
 
   if (!uuid) {
-    if (req.file.path) fs.unlinkSync(req.file.path);
+    fs.unlinkSync(req.file.path);
     return res.status(400).json({ error: 'UUID is required' });
   }
 
@@ -48,69 +64,76 @@ exports.handleConversion = async (req, res) => {
   const outputDir = path.join(__dirname, '../../output');
   const filePrefix = 'page';
 
+  let mergedPdfPath = null;
+  let anchorString = null;
   let generatedImagesFullPaths = [];
-  let mergedPdfPath = null;     // 🔹 NEW
-  let anchorString = null;      // 🔹 NEW
 
   try {
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
+    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
     /* ======================================================
-       🔹 STEP 1: INSERT CUSTOM PAGE INTO PDF (NEW)
-       - Insert page at given index (ex: 3rd page)
-       - Also insert same page at last
-       - This happens BEFORE image conversion
+       STEP 1: MARK RECORD AS PROCESSING
+    ====================================================== */
+    const { data: existing } = await supabase
+      .from(table)
+      .select('id')
+      .eq('id', uuid)
+      .single();
+
+    if (!existing) {
+      fs.unlinkSync(originalPdfPath);
+      return res.status(404).json({ error: 'Record not found (n8n row missing)' });
+    }
+
+    await supabase
+      .from(table)
+      .update({
+        pdf_status: 'processing',
+        customer_full_name,
+        customer_email
+      })
+      .eq('id', uuid);
+
+    /* ======================================================
+       STEP 2: INSERT SIGNATURE PAGE
     ====================================================== */
     const insertAt =
-  Number.isInteger(Number(insert_index)) && Number(insert_index) > 0
-    ? Number(insert_index)
-    : null;
+      Number.isInteger(Number(insert_index)) && Number(insert_index) > 0
+        ? Number(insert_index)
+        : null;
 
-    const totalInv = parseFloat(total_investment_amount || 0);
-    const permit = parseFloat(permit_fee || 0);
-
-const result = await pdfEditor.insertAndAppendSignaturePages(
-  originalPdfPath,
-  insertAt,
-  customer_full_name || '',
-  totalInv,
-  permit,
-  manufacturer || ''
-);
+    const result = await pdfEditor.insertAndAppendSignaturePages(
+      originalPdfPath,
+      insertAt,
+      customer_full_name || '',
+      parseFloat(total_investment_amount || 0),
+      parseFloat(permit_fee || 0),
+      manufacturer || ''
+    );
 
     mergedPdfPath = result.mergedPath;
     anchorString = result.anchorString;
 
     /* ======================================================
-       🔹 STEP 2: UPLOAD MODIFIED PDF TO HUBSPOT (NEW)
-       - This PDF is what n8n + DocuSign will use
+       STEP 3: UPLOAD MODIFIED PDF
     ====================================================== */
-    const mergedPdfName = path.basename(mergedPdfPath);
     const modifiedPdfUrl = await pdfService.uploadToHubSpot(
       mergedPdfPath,
-      mergedPdfName
+      path.basename(mergedPdfPath)
     );
 
-    /* ======================================================
-       🔹 STEP 3: SAVE MODIFIED PDF URL + ANCHOR TO SUPABASE (NEW)
-       - n8n will later read this URL and send to DocuSign
-    ====================================================== */
-    const { error: updatePdfError } = await supabase
-      .from('pdf_conversions')
+    if (!modifiedPdfUrl) throw new Error('PDF upload failed');
+
+    await supabase
+      .from(table)
       .update({
         modified_pdf_url: modifiedPdfUrl,
-        anchor_string: anchorString,
-        pdf_status: 'ready'
+        anchor_string: anchorString
       })
       .eq('id', uuid);
 
-    if (updatePdfError) throw updatePdfError;
-
     /* ======================================================
-       🔹 STEP 4: CONVERT *MERGED PDF* TO IMAGES (UPDATED)
-       - Existing logic, only input PDF changed
+       STEP 4: CONVERT PDF TO IMAGES
     ====================================================== */
     await pdfService.convertPdfToImages(
       mergedPdfPath,
@@ -119,103 +142,86 @@ const result = await pdfEditor.insertAndAppendSignaturePages(
       terms_conditions_page_no
     );
 
-    const generatedImages = fs.readdirSync(outputDir)
+    const images = fs.readdirSync(outputDir)
       .filter(f => f.startsWith(filePrefix) && f.endsWith('.jpg'))
       .sort((a, b) => parseInt(a.match(/\d+/)) - parseInt(b.match(/\d+/)));
 
-    generatedImagesFullPaths = generatedImages.map(img =>
-      path.join(outputDir, img)
-    );
+    generatedImagesFullPaths = images.map(img => path.join(outputDir, img));
 
     /* ======================================================
-       🔹 STEP 5: UPLOAD IMAGES TO HUBSPOT (UNCHANGED)
+       STEP 5: UPLOAD IMAGES
     ====================================================== */
     const imageUrls = [];
-    for (const imgName of generatedImages) {
-      const fullImgPath = path.join(outputDir, imgName);
-      const publicUrl = await pdfService.uploadToHubSpot(fullImgPath, imgName);
-      if (publicUrl) imageUrls.push(publicUrl);
-      await delay(1000);
+    for (const img of images) {
+      const url = await pdfService.uploadToHubSpot(
+        path.join(outputDir, img),
+        img
+      );
+      if (url) imageUrls.push(url);
+      await delay(800);
     }
 
     /* ======================================================
-       🔹 STEP 6: UPDATE IMAGE DATA IN SUPABASE (UNCHANGED)
+       STEP 6: APPEND IMAGE URLS (IMPORTANT FIX)
     ====================================================== */
-    const { error } = await supabase
-      .from('pdf_conversions')
+  await supabase
+  .from(table)
+  .update({
+    image_urls: imageUrls
+  })
+  .eq('id', uuid);
+
+
+    await supabase
+      .from(table)
       .update({
-        image_urls: imageUrls,
+        pdf_status: 'ready',
         processed_pages: terms_conditions_page_no || 'all',
         total_investment_amount,
         permit_fee,
-        manufacturer,
-        customer_full_name,
-        customer_email
+        manufacturer
       })
       .eq('id', uuid);
 
-    if (error) throw error;
-
     return res.json({
       success: true,
+      service,
       id: uuid,
       images: imageUrls,
       modified_pdf_url: modifiedPdfUrl
     });
 
-  } catch (error) {
-    console.error('[handleConversion]', error);
+  } catch (err) {
+    console.error('[handleConversion]', err);
+    await markRecordFailed(table, uuid, err.message || err);
     return res.status(500).json({ error: 'Processing failed' });
   } finally {
-    /* ======================================================
-       🔹 STEP 7: CLEANUP (UPDATED)
-       - Original PDF
-       - Merged PDF
-       - Generated images
-       - Keeps backend load minimal
-    ====================================================== */
-    const cleanupTargets = [originalPdfPath];
-    if (mergedPdfPath) cleanupTargets.push(mergedPdfPath);
-    cleanupFiles(cleanupTargets.concat(generatedImagesFullPaths));
+    cleanupFiles([originalPdfPath, mergedPdfPath, ...generatedImagesFullPaths].filter(Boolean));
   }
 };
 
 /* ==========================================================
-   2. Get Result (UNCHANGED)
+   2. Get Result
 ========================================================== */
 exports.getResult = async (req, res) => {
-  const { id } = req.params;
+  let service, table;
 
   try {
-    const { data, error } = await supabase
-      .from('pdf_conversions')
-      .select(
-        'image_urls, created_at, total_investment_amount, permit_fee, manufacturer, is_signed, signed_pdf_url, signing_url, customer_full_name, customer_email, modified_pdf_url'
-      )
-      .eq('id', id)
-      .single();
-
-    if (error || !data) {
-      return res.status(404).json({ error: 'Record not found' });
-    }
-
-    return res.json({
-      success: true,
-      images: data.image_urls,
-      modified_pdf_url: data.modified_pdf_url,
-      total_investment_amount: data.total_investment_amount,
-      permit_fee: data.permit_fee,
-      manufacturer: data.manufacturer,
-      is_signed: data.is_signed || false,
-      signed_pdf_url: data.signed_pdf_url || null,
-      signing_url: data.signing_url || null,
-      customer_full_name: data.customer_full_name,
-      customer_email: data.customer_email,
-      date: data.created_at
-    });
-
+    service = validateService(req.query.service);
+    table = resolvePdfTable(service);
   } catch (err) {
-    console.error('[getResult]', err);
-    return res.status(500).json({ error: 'Internal Server Error' });
+    return res.status(400).json({ error: err.message });
   }
+
+  const { id } = req.params;
+
+  const { data, error } = await supabase
+    .from(table)
+    .select('*')
+    .eq('id', id)
+    .single();
+
+  if (error || !data) return res.status(404).json({ error: 'Record not found' });
+
+  return res.json({ success: true, service, ...data });
 };
