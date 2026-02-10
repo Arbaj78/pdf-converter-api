@@ -1,4 +1,5 @@
-const ALLOWED_SERVICES = ['window', 'roofing', 'solar'];
+// src/utils/serviceValidator.js
+const ALLOWED_SERVICES = ['window', 'roofing', 'solar', 'remodel'];
 
 function validateService(service) {
   if (!service) {

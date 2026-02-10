@@ -4,6 +4,8 @@ function resolvePdfTable(service) {
       return 'pdf_conversions_roofing';
     case 'solar':
       return 'pdf_conversions_solar';
+    case 'remodel':
+      return 'pdf_conversions_remodel'; // Naya case add kiya
     case 'window':
     default:
       return 'pdf_conversions_window';
